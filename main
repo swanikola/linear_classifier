@@ -1,0 +1,229 @@
+# import libs and set the random generator
+
+import os
+import shutil
+import numpy as np
+import sys
+import random
+import matplotlib.pyplot as plt
+from tqdm.notebook import tqdm
+from sklearn.metrics import accuracy_score
+random.seed(42)
+np.random.seed(42)
+
+# import Tensorboard widget 
+
+import tensorflow as tf
+import tensorboard as tb
+tf.io.gfile = tb.compat.tensorflow_stub.io.gfile
+
+# Tensorboard reload function for GoogleColab
+
+def reinit_tensorboard(clear_log = True):
+  logs_base_dir = "runs"
+  if clear_log:
+    shutil.rmtree(logs_base_dir, ignore_errors = True)
+    os.makedirs(logs_base_dir, exist_ok=True)
+  %load_ext tensorboard
+  %tensorboard --logdir {logs_base_dir}
+
+# download CIFAR-10 dataset for GoogleColab
+
+IN_COLAB = 'google.colab' in sys.modules
+if IN_COLAB:
+    !wget https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz
+    !tar -xzf cifar-10-python.tar.gz
+    !ls -l
+    top_path = "/content"
+else:
+    top_path = ""
+    print("You didn't run code in colab")
+    
+top_path = "/Users/Type_your_own_path"
+
+# recreating python object from the bytecode of the batches
+
+def unpickle(file,encoding = 'bytes'):
+    import pickle
+    with open(file, 'rb') as fo:
+        dict = pickle.load(fo, encoding=encoding)
+    return dict
+
+
+def load_train_data():
+    x_train = [] 
+    y_train = [] 
+    for i in range(1,6):
+        raw = unpickle(f'cifar-10-batches-py/data_batch_{i}')
+        x_train.append(raw[b'data']) 
+        y_train.append(raw[b'labels']) 
+    x_train = np.vstack(x_train)
+    y_train = np.hstack(y_train)
+    return x_train, y_train
+
+x_train, y_train = load_train_data()
+
+# load test data
+
+test = unpickle(top_path+"/cifar-10-batches-py/test_batch")
+x_test = np.array(test[b'data'])
+y_test = np.array(test[b'labels'])
+
+# load classes names 
+
+meta = unpickle(top_path+"/cifar-10-batches-py/batches.meta",'utf-8')
+labels = meta['label_names']
+labels_eng = ['Airplane', 'Car', 'Bird', 'Cat', 'Deer', 'Dog', 'Frog', 'Horse', 'Ship', 'Truck']
+
+# display data(shape [..., 3072])
+
+print("labels: ",labels)
+print('Training data shape: ', x_train.shape)
+print('Training labels shape: ', y_train.shape)
+print('Test data shape: ', x_test.shape)
+print('Test labels shape: ', y_test.shape)
+
+# show 10 images
+
+def to_img(arr):                                                           
+    img = arr.reshape(3,32,32).transpose(1,2,0).astype(int)         # Transform data from vector to array with 3 channel(RGB) 
+    return img
+
+plt.rcParams["figure.figsize"] = (25,10)
+image_to_display = 10
+j = 1
+for i in random.sample(range(0, len(x_train)), image_to_display):
+    plt.subplot(1, image_to_display,j)
+    plt.imshow(to_img(x_train[i]))
+    plt.axis('off')
+    plt.title(labels[int(y_train[i])])
+    j += 1 
+
+# function to compute accuracy
+
+def validate(model,x_test,y_test):
+    y_predicted = []
+    for i, sample in enumerate(x_test):
+        index = model.predict(sample)
+        y_predicted.append(index) 
+    return accuracy_score(y_test, y_predicted)  
+    
+# Classiffier
+
+class LinearClassifier():
+    def __init__(self, labels):
+        self.labels = labels
+        self.classes_num = len(labels)                                           # Generate a random weight matrix of small numbers
+        self.W = np.random.randn(3073, self.classes_num) * 0.0001                # Number of weights changed from 3072 to 3073 for implement bias trick. matrix 3073x10 with norm dist
+        self.batch_size = 256
+                                                                                                                                                                         
+    def train(self, x_train, y_train, learning_rate = 1e-8):
+        loss = 0.0
+        train_len = x_train.shape[0]                                             # number of images
+        indexes = list(range(train_len))                                         # 0 - 49999
+        random.shuffle(indexes)                                                  # shuffle numbers
+        for i in range(0,train_len,self.batch_size):                             # Batch generation
+            idx = indexes[i:i+self.batch_size]                                   # [i:i+256]
+            x_batch = x_train[idx]                                               # create batches 256 length from 50000 objects
+            y_batch = y_train[idx]                                               
+                                                                                 # Bias trick
+            x_batch = np.hstack([x_batch, np.ones((x_batch.shape[0], 1))])       # batch 256x3073 
+            loss_val, grad = self.loss(x_batch, y_batch)
+            loss += loss_val
+            self.W -= learning_rate*grad                                         # Weight updating
+        return loss/(train_len)
+
+    def loss(self,x, y):
+        current_batch_size = x.shape[0]                        # 256
+        loss = 0.0
+        dW = np.zeros(self.W.shape)                            # 3073x10
+        for i in range(current_batch_size): 
+            scores = x[i].dot(self.W)                          # 1x3073 x 3073x10 multiply image pix on a random matrix
+            correct_class_score = scores[int(y[i])]            # choose one of 10 scores depending on class
+            above_zero_loss_count = 0
+            for j in range(self.classes_num):                  # 10
+                if j == y[i]: 
+                    continue
+                margin = scores[j] - correct_class_score + 1   # note: delta = 1
+                if margin > 0:
+                    above_zero_loss_count +=1
+                    loss += margin
+                    dW[:,j] += x[i]                            # We summarize it because grad computed over a batch and
+                                                               # will de divided by number of examples in this batch
+            dW[:,int(y[i])] -= above_zero_loss_count*x[i]
+        
+        loss /= current_batch_size                             # Reqularization gone :(
+        dW /= current_batch_size
+                                                             
+        return loss, dW
+      
+    def predict(self,x):
+        x = np.append(x, 1)                                    # bias trick
+        scores = x.dot(self.W)
+        return np.argmax(scores) 
+        
+# Add regularization and cross-entropy
+
+class LinearClassifierSoftmaxWithReg(LinearClassifier):
+    def __init__(self,labels, reg_strength):
+      super().__init__(labels)
+      self.reg = reg_strength
+
+    def loss(self,x, y):
+      y = [int(i) for i in y]
+      n_features = x.shape[1]                                                                           # number of features 3073
+      n_samples = x.shape[0]                                                                            # number of samples 256
+
+      # Calculate Cross-entropy loss over a batch 
+      
+      scores = x.dot(self.W)                                                                            # 256x10
+      max_scores = scores.max(axis=1, keepdims = True)                                                  # normalize
+      scores -= max_scores
+      correct_logprobs = np.array([scores[i][y[i]] for i in range(n_samples)])                          # flags
+      
+      # Softmax
+      
+      loss = - correct_logprobs.sum() + max_scores.sum() + np.log(np.exp(scores).sum(axis=1)).sum()
+      loss /= n_samples
+      loss += self.reg * np.sum(self.W * self.W)
+      
+      probs = (np.exp(scores) / np.exp(scores).sum(axis=1).reshape(-1, 1))
+      dW = np.zeros(x.shape)
+      
+      # Calculate gradient over a batch + regularization
+      
+      probs[np.arange(n_samples), y] -= 1
+      probs /= n_samples
+      dW = x.T.dot(probs)
+      dW += 2*self.reg * self.W
+      return loss, dW
+
+# Cross-validate
+
+from torch.utils.tensorboard import SummaryWriter
+from sklearn.model_selection import KFold
+
+def cross_validate(reg, x,y):
+    kf=KFold(len(reg), shuffle=True, random_state=42)
+    indx = []
+    for train_index, test_index in kf.split(x):
+        X_train, X_test = x[train_index], x[test_index]
+        Y_train, Y_test = y[train_index], y[test_index]
+        indx.append([X_train, Y_train, X_test, Y_test])
+    return indx
+
+# Display
+
+writer = SummaryWriter()
+
+reg = [10**i for i in range(1, -4, -1)]
+indx = cross_validate(reg = reg, x = x_train, y = y_train)
+for i in tqdm(range(len(reg))):
+    model = LinearClassifierSoftmaxWithReg(labels = labels, reg_strength = reg[i])
+    for epoch in tqdm(range(20)):
+        loss = model.train(indx[i][0], indx[i][1], learning_rate = 1e-10)
+        accuracy = validate(model, indx[i][2], indx[i][3])
+        writer.add_scalar(f"Loss_softreg/train {i}", loss, epoch)
+        
+reinit_tensorboard()
+
