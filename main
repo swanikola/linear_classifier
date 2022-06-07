@@ -39,7 +39,7 @@ else:
     top_path = ""
     print("You didn't run code in colab")
     
-top_path = "/Users/Type_your_own_path"
+top_path = "/Users/teodorseksov/Desktop/UchEba"
 
 # recreating python object from the bytecode of the batches
 
@@ -224,6 +224,6 @@ for i in tqdm(range(len(reg))):
         loss = model.train(indx[i][0], indx[i][1], learning_rate = 1e-10)
         accuracy = validate(model, indx[i][2], indx[i][3])
         writer.add_scalar(f"Loss_softreg/train {i}", loss, epoch)
-        
-reinit_tensorboard()
+        writer.add_scalar(f'Accuracy/test {i}', accuracy, epoch)
 
+reinit_tensorboard(clear_log=False)
